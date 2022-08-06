@@ -11,10 +11,12 @@ import {
 } from 'type-graphql';
 import argon2 from 'argon2';
 import { EntityManager } from '@mikro-orm/postgresql';
-import { COOKIE_NAME } from '../constants';
+import { COOKIE_NAME, FORGOT_PASSWORD_PREFIX } from '../constants';
 import { UsernamePasswordInput } from './UsernamePasswordInput';
 import { validateRegister } from '../util/validateRegister';
 import { sendEmail } from '../util/sendEmail';
+import { v4 as uuidv4 } from 'uuid';
+import { Token } from 'graphql';
 
 @ObjectType() // Used for graphql returns
 class UserResponse {
@@ -34,15 +36,61 @@ class FieldError {
 
 @Resolver()
 export class UserResolver {
+  @Mutation(() => UserResponse)
+  async changePassword(
+    @Arg('token') token: string,
+    @Arg('newPassword') newPassword: string,
+    @Ctx() { req, redis, em }: MyContext
+  ): Promise<UserResponse> {
+    if (newPassword.length <= 3) {
+      return {
+        errors: [
+          { field: 'newPassword', message: 'length must be greater than 3' },
+        ],
+      };
+    }
+
+    const userId = await redis.get(FORGOT_PASSWORD_PREFIX + token);
+    if (!userId) {
+      return {
+        errors: [{ field: 'token', message: 'token expired' }],
+      };
+    }
+
+    const user = await em.findOne(User, { id: parseInt(userId) });
+    if (!user) {
+      return {
+        errors: [{ field: 'token', message: 'user no longer exists' }],
+      };
+    }
+
+    user.password = await argon2.hash(newPassword);
+    em.persistAndFlush(user);
+
+    // login after password change
+    req.session.userId = user.id;
+
+    return { user };
+  }
+
   @Mutation(() => Boolean)
-  async forgotPassword(@Arg('email') email: string, @Ctx() { em }: MyContext) {
+  async forgotPassword(
+    @Arg('email') email: string,
+    @Ctx() { em, redis }: MyContext
+  ) {
     const user = await em.findOne(User, { email });
     if (!user) {
       // email not in db
       return true;
     }
 
-    const passwordResetToken = 'kdfjadlkfjaldf';
+    const passwordResetToken = uuidv4();
+    await redis.set(
+      FORGOT_PASSWORD_PREFIX + Token,
+      user.id,
+      'EX',
+      1000 * 60 * 60 * 24 * 3
+    );
 
     await sendEmail(
       email,

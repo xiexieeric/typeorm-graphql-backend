@@ -13,7 +13,6 @@ import connectRedis from 'connect-redis';
 import { MyContext } from './types';
 import Redis from 'ioredis';
 import cors from 'cors';
-import { sendEmail } from './util/sendEmail';
 
 const main = async () => {
   const orm = await MikroORM.init(microConfig);
@@ -57,7 +56,7 @@ const main = async () => {
       resolvers: [HelloResolver, PostResolver, UserResolver],
       validate: false,
     }),
-    context: ({ req, res }): MyContext => ({ em: orm.em, req, res }),
+    context: ({ req, res }): MyContext => ({ em: orm.em, req, res, redis }),
   });
 
   await apolloServer.start();
